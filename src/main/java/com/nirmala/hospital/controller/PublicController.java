@@ -76,7 +76,7 @@ public class PublicController {
 
     // Doctors
     @GetMapping("/doctors")
-    public List<Doctor> getActiveDoctors(
+    public List<Doctor> getAllDoctors(
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) String search) {
         
@@ -84,20 +84,19 @@ public class PublicController {
         boolean hasSearch = search != null && !search.isBlank();
 
         if (hasDept && hasSearch) {
-            return doctorRepository.searchActiveDoctorsInDepartment(search, departmentId);
+            return doctorRepository.searchAllDoctorsInDepartment(search, departmentId);
         } else if (hasDept) {
-            return doctorRepository.findByDepartmentIdAndStatus(departmentId, "ACTIVE");
+            return doctorRepository.findByDepartmentId(departmentId);
         } else if (hasSearch) {
-            return doctorRepository.searchActiveDoctors(search);
+            return doctorRepository.searchAllDoctors(search);
         } else {
-            return doctorRepository.findByStatus("ACTIVE");
+            return doctorRepository.findAll();
         }
     }
 
     @GetMapping("/doctors/{id}")
     public ResponseEntity<Doctor> getDoctorById(@PathVariable String id) {
         return doctorRepository.findById(id)
-                .filter(d -> "ACTIVE".equals(d.getStatus()))
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
