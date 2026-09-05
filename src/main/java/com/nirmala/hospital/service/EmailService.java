@@ -13,8 +13,16 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -33,6 +41,14 @@ public class EmailService {
 
     @Value("${MAIL_FROM_NAME:Nirmala Neuro & General Medical Centre}")
     private String fromName;
+
+    @Value("${BREVO_API_KEY:${MAIL_API_KEY:}}")
+    private String brevoApiKey;
+
+    @Value("${RESEND_API_KEY:}")
+    private String resendApiKey;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public void sendAppointmentPendingEmail(Appointment appointment, String doctorName, String departmentName) {
         String apptRef = appointment.getAppointmentId() != null ? appointment.getAppointmentId() : appointment.getId();
@@ -245,13 +261,30 @@ public class EmailService {
             return false;
         }
 
-        if (mailSender == null) {
-            logger.info("JavaMailSender not configured. Email logged locally. To: {}, Subject: {}", recipientEmail, subject);
-            updateLogStatus(log, "SENT", "Logged to console (JavaMailSender disabled)");
-            return true;
-        }
-
         try {
+            // 1. Try Brevo HTTPS REST API (Port 443 — Unblocked on Render)
+            if (brevoApiKey != null && !brevoApiKey.isBlank()) {
+                sendViaBrevo(recipientEmail, subject, htmlContent, attachmentBytes, attachmentName);
+                logger.info("Successfully sent email [{}] via Brevo API to {}", emailType, recipientEmail);
+                updateLogStatus(log, "SENT", "Sent via Brevo HTTP API");
+                return true;
+            }
+
+            // 2. Try Resend HTTPS REST API (Port 443 — Unblocked on Render)
+            if (resendApiKey != null && !resendApiKey.isBlank()) {
+                sendViaResend(recipientEmail, subject, htmlContent, attachmentBytes, attachmentName);
+                logger.info("Successfully sent email [{}] via Resend API to {}", emailType, recipientEmail);
+                updateLogStatus(log, "SENT", "Sent via Resend HTTP API");
+                return true;
+            }
+
+            // 3. Fallback to JavaMailSender (SMTP)
+            if (mailSender == null) {
+                logger.info("JavaMailSender not configured. Email logged locally. To: {}, Subject: {}", recipientEmail, subject);
+                updateLogStatus(log, "SENT", "Logged to console (No mail provider configured)");
+                return true;
+            }
+
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
@@ -265,29 +298,97 @@ public class EmailService {
             helper.setTo(recipientEmail);
             helper.setSubject(subject);
             
-            // Add plain text + HTML multipart to pass spam filters (SPF/DKIM alignment)
             String plainText = htmlContent.replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ").trim();
             helper.setText(plainText, htmlContent);
 
-            // Anti-Spam Headers
             message.addHeader("X-Priority", "1");
             message.addHeader("X-MSMail-Priority", "High");
             message.addHeader("Importance", "High");
             message.addHeader("X-Mailer", "NirmalaHospitalNotificationSystem/1.0");
-            message.addHeader("Precedence", "bulk");
 
             if (attachmentBytes != null && attachmentName != null) {
                 helper.addAttachment(attachmentName, new ByteArrayResource(attachmentBytes));
             }
 
             mailSender.send(message);
-            logger.info("Successfully sent email [{}] to {}", emailType, recipientEmail);
-            updateLogStatus(log, "SENT", null);
+            logger.info("Successfully sent email [{}] via SMTP to {}", emailType, recipientEmail);
+            updateLogStatus(log, "SENT", "Sent via SMTP");
             return true;
         } catch (Exception e) {
             logger.error("Failed to send email [{}] to {}: {}", emailType, recipientEmail, e.getMessage());
             updateLogStatus(log, "FAILED", e.getMessage());
             return false;
+        }
+    }
+
+    private void sendViaBrevo(String recipientEmail, String subject, String htmlContent, byte[] attachmentBytes, String attachmentName) throws Exception {
+        String url = "https://api.brevo.com/v3/smtp/email";
+        
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("sender", Map.of("name", fromName, "email", fromEmail));
+        payload.put("to", List.of(Map.of("email", recipientEmail)));
+        payload.put("subject", subject);
+        payload.put("htmlContent", htmlContent);
+
+        if (attachmentBytes != null && attachmentName != null) {
+            String base64Content = Base64.getEncoder().encodeToString(attachmentBytes);
+            payload.put("attachment", List.of(Map.of("name", attachmentName, "content", base64Content)));
+        }
+
+        String jsonBody = objectMapper.writeValueAsString(payload);
+
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("accept", "application/json")
+                .header("api-key", brevoApiKey.trim())
+                .header("content-type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                .timeout(Duration.ofSeconds(15))
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new RuntimeException("Brevo API HTTP " + response.statusCode() + ": " + response.body());
+        }
+    }
+
+    private void sendViaResend(String recipientEmail, String subject, String htmlContent, byte[] attachmentBytes, String attachmentName) throws Exception {
+        String url = "https://api.resend.com/emails";
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("from", fromName + " <" + fromEmail + ">");
+        payload.put("to", List.of(recipientEmail));
+        payload.put("subject", subject);
+        payload.put("html", htmlContent);
+
+        if (attachmentBytes != null && attachmentName != null) {
+            String base64Content = Base64.getEncoder().encodeToString(attachmentBytes);
+            payload.put("attachments", List.of(Map.of("filename", attachmentName, "content", base64Content)));
+        }
+
+        String jsonBody = objectMapper.writeValueAsString(payload);
+
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", "Bearer " + resendApiKey.trim())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                .timeout(Duration.ofSeconds(15))
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new RuntimeException("Resend API HTTP " + response.statusCode() + ": " + response.body());
         }
     }
 
@@ -306,9 +407,46 @@ public class EmailService {
         res.put("fromName", fromName);
         res.put("recipient", toEmail);
 
+        if (brevoApiKey != null && !brevoApiKey.isBlank()) {
+            res.put("provider", "Brevo HTTPS API (Port 443)");
+            try {
+                sendViaBrevo(toEmail, "Test Email - Nirmala Hospital Cloud Deployment",
+                        "<div style='font-family:sans-serif; padding:20px; color:#1e293b;'>" +
+                        "<h2>Test Email Successful!</h2>" +
+                        "<p>Your email service on Render is connected to Brevo API over HTTPS (Port 443) and working 100% reliably!</p>" +
+                        "<p>Regards,<br><strong>Nirmala Neuro & General Medical Centre</strong></p></div>",
+                        null, null);
+                res.put("status", "SUCCESS");
+                res.put("message", "Email successfully dispatched via Brevo HTTP API to " + toEmail);
+                return res;
+            } catch (Exception e) {
+                logger.error("Brevo API test failed", e);
+                res.put("status", "ERROR");
+                res.put("errorMessage", e.getMessage());
+                return res;
+            }
+        }
+
+        if (resendApiKey != null && !resendApiKey.isBlank()) {
+            res.put("provider", "Resend HTTPS API (Port 443)");
+            try {
+                sendViaResend(toEmail, "Test Email - Nirmala Hospital Cloud Deployment",
+                        "<h2>Test Email Successful!</h2><p>Sent via Resend API over HTTPS.</p>", null, null);
+                res.put("status", "SUCCESS");
+                res.put("message", "Email successfully dispatched via Resend HTTP API to " + toEmail);
+                return res;
+            } catch (Exception e) {
+                logger.error("Resend API test failed", e);
+                res.put("status", "ERROR");
+                res.put("errorMessage", e.getMessage());
+                return res;
+            }
+        }
+
+        res.put("provider", "SMTP (Port 465/587)");
         if (mailSender == null) {
             res.put("status", "ERROR");
-            res.put("message", "JavaMailSender bean is not initialized");
+            res.put("message", "No email provider or JavaMailSender configured");
             return res;
         }
 
