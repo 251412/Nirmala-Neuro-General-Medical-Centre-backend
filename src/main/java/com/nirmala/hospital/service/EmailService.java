@@ -48,6 +48,9 @@ public class EmailService {
     @Value("${RESEND_API_KEY:}")
     private String resendApiKey;
 
+    @Value("${RESEND_FROM:onboarding@resend.dev}")
+    private String resendFromEmail;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public void sendAppointmentPendingEmail(Appointment appointment, String doctorName, String departmentName) {
@@ -360,9 +363,15 @@ public class EmailService {
     private void sendViaResend(String recipientEmail, String subject, String htmlContent, byte[] attachmentBytes, String attachmentName) throws Exception {
         String url = "https://api.resend.com/emails";
 
+        String senderAddress = (resendFromEmail != null && !resendFromEmail.isBlank()) ? resendFromEmail : "onboarding@resend.dev";
+        String senderHeader = (fromName != null && !fromName.isBlank()) 
+                ? fromName + " <" + senderAddress + ">"
+                : senderAddress;
+
         Map<String, Object> payload = new HashMap<>();
-        payload.put("from", fromName + " <" + fromEmail + ">");
+        payload.put("from", senderHeader);
         payload.put("to", List.of(recipientEmail));
+        payload.put("reply_to", fromEmail);
         payload.put("subject", subject);
         payload.put("html", htmlContent);
 
