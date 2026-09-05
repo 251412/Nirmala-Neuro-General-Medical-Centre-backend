@@ -26,7 +26,7 @@ public class EmailService {
     @Autowired
     private EmailLogRepository emailLogRepository;
 
-    @Value("${MAIL_FROM:nirmalaneurocare@gmail.com}")
+    @Value("${MAIL_FROM:${spring.mail.username:nirmalaneurocarevzm@gmail.com}}")
     private String fromEmail;
 
     @Value("${MAIL_FROM_NAME:Nirmala Neuro & General Medical Centre}")
