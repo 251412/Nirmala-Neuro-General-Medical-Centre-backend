@@ -14,6 +14,8 @@ import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
 @Service
 public class EmailService {
@@ -295,6 +297,46 @@ public class EmailService {
             log.setErrorMessage(errorMessage);
             log.setSentAt(LocalDateTime.now());
             emailLogRepository.save(log);
+        }
+    }
+
+    public Map<String, Object> testSmtpConnection(String toEmail) {
+        Map<String, Object> res = new HashMap<>();
+        res.put("fromEmail", fromEmail);
+        res.put("fromName", fromName);
+        res.put("recipient", toEmail);
+
+        if (mailSender == null) {
+            res.put("status", "ERROR");
+            res.put("message", "JavaMailSender bean is not initialized");
+            return res;
+        }
+
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, false, "UTF-8");
+            if (fromName != null && !fromName.isBlank()) {
+                helper.setFrom(fromEmail, fromName);
+            } else {
+                helper.setFrom(fromEmail);
+            }
+            helper.setTo(toEmail);
+            helper.setSubject("Test Email - Nirmala Hospital Cloud Deployment");
+            helper.setText("Hello! If you are reading this email, your SMTP configuration on Render is working 100% successfully!", false);
+
+            mailSender.send(message);
+            res.put("status", "SUCCESS");
+            res.put("message", "Email successfully dispatched to " + toEmail);
+            return res;
+        } catch (Exception e) {
+            logger.error("Test email connection failed", e);
+            res.put("status", "ERROR");
+            res.put("errorMessage", e.getMessage());
+            res.put("errorClass", e.getClass().getName());
+            if (e.getCause() != null) {
+                res.put("causeMessage", e.getCause().getMessage());
+            }
+            return res;
         }
     }
 

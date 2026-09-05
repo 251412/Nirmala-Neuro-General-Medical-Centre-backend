@@ -335,4 +335,11 @@ public class PublicController {
         }
         return ResponseEntity.ok(upcoming.get());
     }
+
+    // SMTP Diagnostic Test Endpoint
+    @GetMapping("/test-email")
+    public ResponseEntity<?> testEmail(@RequestParam(defaultValue = "nirmalaneurocarevzm@gmail.com") String to) {
+        Map<String, Object> result = emailService.testSmtpConnection(to);
+        return ResponseEntity.ok(result);
+    }
 }
