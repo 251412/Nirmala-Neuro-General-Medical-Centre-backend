@@ -377,6 +377,14 @@ public class AdminController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @DeleteMapping("/contact/{id}")
+    public ResponseEntity<?> deleteContactMessage(@PathVariable String id) {
+        return contactMessageRepository.findById(id).map(message -> {
+            contactMessageRepository.delete(message);
+            return ResponseEntity.ok(Map.of("message", "Contact message deleted successfully"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
     // BLOG MANAGEMENT
     @GetMapping("/blogs")
     public List<Blog> getAllBlogs() {
